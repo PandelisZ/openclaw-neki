@@ -1,0 +1,45 @@
+{
+  "name": "@pandelisz/openclaw-neki",
+  "version": "0.1.0-experimental.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental OpenClaw compatibility work for PlanetScale Neki",
+  "engines": {
+    "node": ">=24.22.1"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:live": "node --test test/live/*.test.mjs",
+    "probe": "node bin/openclaw-neki.mjs probe",
+    "check": "node --check src/index.mjs && node --check src/probe.mjs && node --check src/schema-profile.mjs && node --check src/sql.mjs && node --check scripts/apply-host-patch.mjs && node --check scripts/qualify-gateway.mjs && node --check scripts/gateway-phase.mjs"
+  },
+  "bin": {
+    "openclaw-neki": "bin/openclaw-neki.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./schema-profile": "./src/schema-profile.mjs"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  },
+  "peerDependencies": {
+    "openclaw": "2026.10.8"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.mjs"
+    ],
+    "compat": {
+      "pluginApi": "2026.10.8"
+    },
+    "build": {
+      "openclawVersion": "2026.10.8"
+    }
+  }
+}
