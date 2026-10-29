@@ -1,0 +1,39 @@
+{
+  "id": "neki",
+  "name": "PlanetScale Neki (experimental)",
+  "description": "Experimental single-shard Neki schema lifecycle and diagnostics. Requires the pinned host patch.",
+  "categories": [
+    "infrastructure"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "connectionEnv": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+        "default": "NEKI_DATABASE_URL"
+      }
+    }
+  },
+  "postgresSchemaLifecycle": "./src/schema-profile.mjs",
+  "cliCommands": [
+    {
+      "name": "neki",
+      "description": "Qualify PlanetScale Neki compatibility (experimental)",
+      "hasSubcommands": true
+    }
+  ],
+  "activation": {
+    "onStartup": false,
+    "onCommands": [
+      "neki"
+    ]
+  },
+  "commandAliases": [
+    {
+      "name": "neki",
+      "kind": "cli"
+    }
+  ]
+}

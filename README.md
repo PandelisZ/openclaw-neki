@@ -1,39 +1,46 @@
 # OpenClaw + PlanetScale Neki
 
-Research and compatibility work toward running OpenClaw's native conversation storage on PlanetScale Neki.
+Experimental OpenClaw extension for native agent storage on **one PlanetScale Neki shard**.
 
-**Status: investigation. No working conversation backend or successful model conversation on Neki has been demonstrated. This repository does not yet contain a plugin implementation.**
+The repository includes the extension, a version-pinned host patch, capability probes, recovery tests, and a real Gateway qualification harness. **Stock OpenClaw does not expose the required storage lifecycle hooks. This requires the included host patch and is not production-ready.**
 
-## Starting evidence
+The verified milestone is native agent data on Neki with local SQLite shared state: an isolated Gateway completed a real model turn, stopped, restarted in a new process, retrieved the saved assistant reply, and completed a second model turn recalling the original context. See [verification](docs/verification.md) for the evidence and limits.
 
-The following findings come from a research handoff dated 2026-10-28, against upstream OpenClaw commit `d7349d9395e2bde0f42882a9f7ef8afab59e19c3`. Recheck them against current upstream before implementation.
+## Design
 
-- Native shared-state discovery calls `pg_export_snapshot()`. The recorded Neki error reports that this built-in function is unavailable in its evaluation engine.
-- OpenClaw's supported mixed mode (`database.engine=postgres`, `database.families.state.engine=sqlite`) bypasses that snapshot path, but native agent initialization encounters Neki error `NK013`: queries cannot plan against a relation created earlier in the same transaction because the router schema view does not reflect that DDL.
-- Schema initialization, bootstrap probes and database porting include DDL and queries in one transaction. No supported option to disable those transactions was found.
-- Offline state porting to SQLite succeeded in the handoff's test, but both ported and fresh mixed-mode gateways still failed native agent bootstrap. That result does not establish conversation support.
+- Bootstrap uses routed autocommit DDL with durable receipts for every effect. Unknown outcomes stop initialization for manual recovery.
+- OpenClaw retains native identities, catalog verification, initial-row transactions, ownership checks, and schema sealing.
+- After admission, runtime data queries target an explicitly configured shard and verify that shard's native store identity. Runtime transactions remain intact.
+- Sequence allocation runs separately inside the caller's transaction where Neki cannot forward sequence functions with table access.
+- Derived full-text/vector search, migrations, database porting, multi-shard use, and topology changes are unsupported. Canonical conversation content remains in native tables.
 
-## Extension boundary
+## Try it
 
-The pinned source exposes only the built-in SQLite and PostgreSQL database engines. Its public plugin API did not expose a hook to replace core conversation storage, register a database adapter or change migration transaction behavior.
+Use a dedicated test database with one shard, a DDL-capable role, and a fresh OpenClaw state directory. Keep credentials in environment variables.
 
-Storage-provider, external-import migration and configuration-migration APIs serve other purposes. A tool or archive plugin would not provide native conversation storage.
+```sh
+mise trust
+mise exec -- pnpm install --frozen-lockfile
+mise exec -- pnpm test
+mise exec -- node scripts/apply-host-patch.mjs /absolute/path/to/pinned/openclaw
+```
 
-A viable approach needs an upstream extension point or improved Neki compatibility. Do not silently strip transaction boundaries or present a fork as an upstream-supported plugin.
+The patch applies only to upstream commit `d7349d9395e2bde0f42882a9f7ef8afab59e19c3`. It checks the original file hashes and refuses a different or modified base. Install the host's dependencies using its own instructions.
 
-## Research and implementation steps
+Configure `NEKI_DATABASE_URL`, `NEKI_RUNTIME_SHARD_UID`, and an isolated instance as described in [host integration](docs/host-integration.md). The shard UID is the provider's SQL shard name, not its API resource ID. Obtain and confirm it through your authorized administrative tooling; the extension does not guess or create it.
 
-1. Refresh issue and pull-request searches in OpenClaw and relevant PlanetScale trackers.
-2. Inspect the related closed issue [Rika-Labs/akter#487](https://github.com/Rika-Labs/akter/issues/487) and its linked fix for Neki DDL handling, including `__neki.wait_for_ddl()`. Applicability to OpenClaw remains unverified.
-3. Build a minimal reproduction with disposable test resources and no private configuration.
-4. Assess a narrow boot-selected compatibility provider loaded before state discovery, with explicit snapshot and bootstrap/migration/port capabilities.
-5. Preserve consistency, migration receipts, custody and recovery guarantees. Unsupported capabilities should fail closed.
-6. Qualify any implementation with real Neki native readiness and a successful model conversation, including restart/recovery evidence. Unit tests and a running supervisor alone are insufficient.
+For an opt-in live test, also supply `OPENAI_API_KEY`, `OPENCLAW_SOURCE_DIR` pointing to that patched checkout, and `NEKI_SINGLE_SHARD=1` after confirming topology:
 
-The handoff's searches found no exact OpenClaw/Neki issue. This is a historical search result, not a current or exhaustive absence claim. Draft a minimal, secret-free upstream report before requesting authorization to post it.
+```sh
+mise exec -- pnpm test:live
+```
 
-## Isolation
+This creates disposable schemas, makes paid model requests, stops the Gateway process, restarts it, checks the saved assistant reply, and asks the model to recall a synthetic marker. It drops its schemas afterward and retains private local evidence for inspection. Missing credentials or a failed assistant turn cannot count as a pass.
 
-Use dedicated development and test resources. Do not change any existing application's production configuration, deployments, tenants, database credentials, volumes or feature flags.
+`pnpm probe --write-probes` runs smaller compatibility probes. It deliberately exits 2 because those probes cannot establish conversation readiness.
 
-Keep private logs, provider account identifiers, database identifiers, credentials and raw operational evidence out of this repository. Document only minimized errors and reproducible, secret-free examples.
+## Background
+
+[Issue research](docs/issues.md) records the original snapshot, transactional DDL, and search-configuration failures. No upstream report has been posted. The host patch is an experimental proposal, not released upstream functionality.
+
+Keep private logs, database/account identifiers, configuration, and credentials out of this repository. Existing application deployments and data are outside this experiment's scope.

@@ -1,0 +1,1094 @@
+diff --git a/src/config/sessions/session-transcript-fts.neki.test.ts b/src/config/sessions/session-transcript-fts.neki.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/config/sessions/session-transcript-fts.neki.test.ts
+@@ -0,0 +1,138 @@
++import type { SQLInputValue } from "node:sqlite";
++import { beforeEach, expect, it, vi } from "vitest";
++import type { PostgresSqlConnection } from "../../infra/sql-connection.js";
++import {
++  allocatePostgresSessionTranscriptFtsIds,
++  createSessionTranscriptFtsInserter,
++} from "./session-transcript-fts.js";
++import { createPostgresProjectionFlusher } from "./session-transcript-index-postgres.js";
++
++const state = vi.hoisted(() => ({ standalone: true }));
++vi.mock("../../infra/database-engine/schema-lifecycle.js", () => ({
++  getPostgresSchemaLifecycle: () =>
++    state.standalone ? { sequenceAllocation: "standalone" } : undefined,
++}));
++vi.mock("../../infra/database-engine/adapters.js", () => ({ admitStoreSearch: vi.fn() }));
++vi.mock("../../infra/sqlite-database-admission.js", () => ({
++  sqliteSessionIdWriteScope: (sessionId: string) => sessionId,
++  withSqliteDatabaseWriteScope: (_db: unknown, _scope: unknown, operation: () => unknown) =>
++    operation(),
++}));
++
++beforeEach(() => {
++  state.standalone = true;
++});
++
++function fixture() {
++  const queries: { sql: string; parameters: readonly SQLInputValue[] }[] = [];
++  let nextId = 9007199254740993n;
++  const db = {
++    [Symbol.for("openclaw.postgres-sync-connection")]: true,
++    isTransaction: true,
++    query(sql: string, parameters: readonly SQLInputValue[] = []) {
++      queries.push({ sql, parameters });
++      const allocation = sql.startsWith("select CAST(nextval");
++      return {
++        rows: allocation ? [{ id: String(nextId++) }] : [{ written: 1 }],
++        rowCount: 1,
++        columns: [{ name: allocation ? "id" : "written" }],
++      };
++    },
++  };
++  return { db: db as unknown as PostgresSqlConnection, queries };
++}
++
++const entries = [
++  { messageId: "first", role: "user" as const, text: "one", timestamp: 1 },
++  { messageId: "second", role: "assistant" as const, text: "two", timestamp: 2 },
++];
++
++it("allocates standalone int64 IDs losslessly only inside a native transaction", () => {
++  const { db, queries } = fixture();
++  expect(allocatePostgresSessionTranscriptFtsIds(db, 2)).toEqual([
++    "9007199254740993",
++    "9007199254740994",
++  ]);
++  expect(queries).toHaveLength(2);
++  Object.defineProperty(db, "isTransaction", { value: false });
++  expect(() => allocatePostgresSessionTranscriptFtsIds(db, 1)).toThrow(
++    /requires a native transaction/,
++  );
++  expect(queries).toHaveLength(2);
++});
++
++it("binds new standalone IDs on every cached inserter invocation", () => {
++  const { db, queries } = fixture();
++  const insert = createSessionTranscriptFtsInserter(db, "session");
++  expect(queries).toHaveLength(0);
++  insert(entries);
++  insert(entries);
++  expect(queries).toHaveLength(6);
++  for (const index of [2, 5]) {
++    const write = queries[index]!;
++    expect(write.sql).not.toContain("nextval");
++    expect(write.sql).toContain('"ids" as materialized (SELECT * FROM (VALUES');
++    expect(write.sql).toContain("AS bigint");
++    expect(write.sql).toContain('order by "position"');
++    expect(write.sql).toContain('order by "id"');
++    expect(write.parameters).toContain("first");
++    expect(write.parameters).toContain("second");
++  }
++  expect(queries[2]!.parameters).toContain("9007199254740993");
++  expect(queries[5]!.parameters).toContain("9007199254740995");
++  expect(queries[5]!.parameters).not.toContain("9007199254740993");
++});
++
++it("leaves default PostgreSQL allocation inside its existing multi-write CTE", () => {
++  state.standalone = false;
++  const { db, queries } = fixture();
++  createSessionTranscriptFtsInserter(db, "session")(entries);
++  expect(queries).toHaveLength(1);
++  expect(queries[0]!.sql).toContain("nextval(pg_get_serial_sequence(");
++  expect(queries[0]!.sql).not.toContain("standalone_ids");
++});
++
++it("projection flusher binds invocation-local standalone IDs and retains projection writes", () => {
++  const { db, queries } = fixture();
++  const flush = createPostgresProjectionFlusher(db, "session");
++  expect(queries).toHaveLength(0);
++  const chunk = {
++    activeRows: [],
++    ftsRows: entries,
++    watermark: {
++      activeEventCount: 2,
++      activeMessageCount: 2,
++      indexedSeq: 2,
++      leafEventId: "second",
++      needsRebuild: false,
++      updatedAt: 3,
++    },
++  };
++  flush(chunk, false);
++  flush(chunk, true);
++  expect(queries).toHaveLength(6);
++  expect(queries[2]!.sql).toContain('insert into "session_transcript_index_state"');
++  expect(queries[2]!.sql).toContain('"ids" as materialized (SELECT * FROM (VALUES');
++  expect(queries[5]!.sql).toContain('update "session_transcript_index_state"');
++  for (const index of [2, 5]) {
++    expect(queries[index]!.sql).not.toContain("nextval");
++  }
++  expect(queries[2]!.parameters).toContain("9007199254740993");
++  expect(queries[5]!.parameters).toContain("9007199254740995");
++});
++
++it("never executes the multi-write CTE after an allocation failure", () => {
++  const { db, queries } = fixture();
++  const query = db.query;
++  db.query = (sql, parameters) => {
++    if (queries.length === 1) {
++      throw new Error("allocation custody expired");
++    }
++    return query(sql, parameters);
++  };
++  expect(() => createSessionTranscriptFtsInserter(db, "session")(entries)).toThrow(
++    /allocation custody expired/,
++  );
++  expect(queries).toHaveLength(1);
++  expect(queries[0]!.sql).toContain("nextval");
++});
+diff --git a/src/config/sessions/session-transcript-fts.ts b/src/config/sessions/session-transcript-fts.ts
+--- a/src/config/sessions/session-transcript-fts.ts
++++ b/src/config/sessions/session-transcript-fts.ts
+@@ -1,5 +1,6 @@
+ import { sql, type RawBuilder } from "kysely";
+ import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
++import { getPostgresSchemaLifecycle } from "../../infra/database-engine/schema-lifecycle.js";
+ import {
+   executeSqliteQuerySync,
+   getNodeSqliteKysely,
+@@ -37,17 +38,47 @@
+   timestamp: number | string | null;
+ };
+ 
++/** Allocate outside the multi-write CTE while retaining the caller's transaction. */
++export function allocatePostgresSessionTranscriptFtsIds(
++  db: EngineConnection,
++  count: number,
++): string[] {
++  if (!isPostgresSqlConnection(db) || !db.isTransaction) {
++    throw new Error("PostgreSQL transcript identity allocation requires a native transaction");
++  }
++  if (!Number.isSafeInteger(count) || count < 0 || count > TRANSCRIPT_INSERT_BATCH_SIZE) {
++    throw new Error("Invalid bounded transcript identity allocation count");
++  }
++  const allocate = prepareSqliteQuerySync<undefined, { id: string }>(db, () =>
++    getNodeSqliteKysely(db).selectNoFrom(
++      /* kysely-allow-raw: Standalone sequence allocation avoids router-managed functions inside a table CTE. */
++      sql<string>`CAST(nextval(pg_get_serial_sequence('session_transcript_fts_rows', 'id')) AS text)`.as(
++        "id",
++      ),
++    ),
++  );
++  return Array.from({ length: count }, () => {
++    const id = allocate(undefined).rows[0]?.id;
++    if (typeof id !== "string" || !/^[1-9][0-9]*$/.test(id) || BigInt(id) > 9223372036854775807n) {
++      throw new Error("PostgreSQL transcript sequence returned an invalid bigint identity");
++    }
++    return id;
++  });
++}
++
+ /** Shared PG allocation: content consumes returned identities, never sibling-table reads. */
+ export function withPostgresSessionTranscriptFtsRows(
+   db: EngineConnection,
+   sessionId: string,
+   source: RawBuilder<SessionTranscriptFtsSourceRow>,
++  ids?: RawBuilder<{ id: number }>,
+ ) {
+   return getNodeSqliteKysely<TranscriptFtsDatabase>(db)
+     .with("entries(position, message_id, text, role, timestamp)", () => source)
+     .with(
+       (cte) => cte("ids").materialized(),
+       (query) =>
++        ids ??
+         query
+           .selectFrom("entries")
+           // Allocate exactly once per entry, independent of evaluation order.
+@@ -134,18 +165,29 @@
+ export function createSessionTranscriptFtsInserter(db: EngineConnection, sessionId: string) {
+   const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
+   const postgres = isPostgresSqlConnection(db);
++  const standaloneIds =
++    postgres && getPostgresSchemaLifecycle(db)?.sequenceAllocation === "standalone";
+   const search = postgres ? undefined : admitStoreSearch(db, agentTranscriptSearchSchema);
+   if (search && !search.fullText) {
+     throw new Error(search.diagnostics.join("; "));
+   }
+   const prepare = (count: number) => {
+     const indexes = Array.from({ length: count }, (_, index) => index);
+-    const insertContent = prepareSqliteQuerySync<readonly TranscriptFtsEntry[]>(db, (parameter) => {
++    const insertContent = prepareSqliteQuerySync<{
++      entries: readonly TranscriptFtsEntry[];
++      ids: readonly string[];
++    }>(db, (parameter) => {
+       const source =
+         /* kysely-allow-raw: A bounded VALUES relation carries entry order with the content. */
+-        sql<SessionTranscriptFtsSourceRow>`(values ${sql.join(indexes.map((index) => sql`(${sql.lit(index)}, ${parameter((rows) => rows[index]!.messageId)}, ${parameter((rows) => rows[index]!.text)}, ${parameter((rows) => rows[index]!.role)}, ${parameter((rows) => rows[index]!.timestamp)})`))})`;
++        sql<SessionTranscriptFtsSourceRow>`(values ${sql.join(indexes.map((index) => sql`(${sql.lit(index)}, ${parameter((chunk) => chunk.entries[index]!.messageId)}, ${parameter((chunk) => chunk.entries[index]!.text)}, ${parameter((chunk) => chunk.entries[index]!.role)}, ${parameter((chunk) => chunk.entries[index]!.timestamp)})`))})`;
+       if (postgres) {
+-        return withPostgresSessionTranscriptFtsRows(db, sessionId, source).selectNoFrom(
++        const ids = standaloneIds
++          ? /* kysely-allow-raw: Validated decimal int64 sequence values remain bound parameters. */
++            sql<{
++              id: number;
++            }>`(SELECT * FROM (VALUES ${sql.join(indexes.map((index) => sql`(CAST(${parameter((chunk) => chunk.ids[index]!)} AS bigint))`))}) AS standalone_ids(id))`
++          : undefined;
++        return withPostgresSessionTranscriptFtsRows(db, sessionId, source, ids).selectNoFrom(
+           sql.lit(1).as("written"),
+         );
+       }
+@@ -185,7 +227,11 @@
+         );
+     });
+     if (postgres) {
+-      return insertContent;
++      return (entries: readonly TranscriptFtsEntry[]) =>
++        insertContent({
++          entries,
++          ids: standaloneIds ? allocatePostgresSessionTranscriptFtsIds(db, entries.length) : [],
++        });
+     }
+     const insertIdentities = prepareSqliteQuerySync<readonly TranscriptFtsEntry[]>(
+       db,
+@@ -199,7 +245,7 @@
+     );
+     return (entries: readonly TranscriptFtsEntry[]) => {
+       insertIdentities(entries);
+-      insertContent(entries);
++      insertContent({ entries, ids: [] });
+     };
+   };
+   const inserts = new Map<number, ReturnType<typeof prepare>>();
+diff --git a/src/config/sessions/session-transcript-index-postgres.ts b/src/config/sessions/session-transcript-index-postgres.ts
+--- a/src/config/sessions/session-transcript-index-postgres.ts
++++ b/src/config/sessions/session-transcript-index-postgres.ts
+@@ -1,12 +1,14 @@
+ import { sql, type UpdateQueryBuilder, type UpdateResult } from "kysely";
++import { getPostgresSchemaLifecycle } from "../../infra/database-engine/schema-lifecycle.js";
+ import { getNodeSqliteKysely, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+-import type { EngineConnection } from "../../infra/sql-connection.js";
++import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
+ import {
+   sqliteSessionIdWriteScope,
+   withSqliteDatabaseWriteScope,
+ } from "../../infra/sqlite-database-admission.js";
+ import type { DB } from "../../state/openclaw-agent-db.generated.js";
+ import {
++  allocatePostgresSessionTranscriptFtsIds,
+   withPostgresSessionTranscriptFtsRows,
+   type SessionTranscriptFtsSourceRow,
+ } from "./session-transcript-fts.js";
+@@ -30,7 +32,11 @@
+     activeRows: PreparedSessionTranscriptProjection["activeRows"];
+     ftsRows: TranscriptIndexEntry[];
+     watermark?: SessionTranscriptProjectionState & { updatedAt: number };
++    ids?: readonly string[];
+   };
++  const standaloneIds =
++    isPostgresSqlConnection(db) &&
++    getPostgresSchemaLifecycle(db)?.sequenceAllocation === "standalone";
+   const kysely =
+     getNodeSqliteKysely<
+       Pick<DB, "session_transcript_active_events" | "session_transcript_index_state">
+@@ -55,6 +61,12 @@
+                     sql`(${sql.lit(index)}, ${parameter((chunk) => chunk.ftsRows[index]!.messageId)}, ${parameter((chunk) => chunk.ftsRows[index]!.text)}, ${parameter((chunk) => chunk.ftsRows[index]!.role)}, ${parameter((chunk) => chunk.ftsRows[index]!.timestamp)})`,
+                 ),
+               )})`,
++              standaloneIds
++                ? /* kysely-allow-raw: Standalone sequence identities are bound losslessly and cast in PostgreSQL. */
++                  sql<{
++                    id: number;
++                  }>`(SELECT * FROM (VALUES ${sql.join(Array.from({ length: ftsCount }, (_, index) => sql`(CAST(${parameter((chunk) => chunk.ids![index]!)} AS bigint))`))}) AS standalone_ids(id))`
++                : undefined,
+             )
+           : kysely;
+       const withActive =
+@@ -117,7 +129,7 @@
+       pending.watermark || windowUpdate ? 1 : 0,
+     );
+     for (let offset = 0; offset < count; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
+-      const chunk = {
++      const chunk: Chunk = {
+         activeRows: pending.activeRows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE),
+         ftsRows: pending.ftsRows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE),
+         watermark: offset + TRANSCRIPT_INSERT_BATCH_SIZE >= count ? pending.watermark : undefined,
+@@ -133,7 +145,12 @@
+         write = prepare(chunk.activeRows.length, chunk.ftsRows.length, mode);
+         writes.set(key, write);
+       }
+-      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(chunk));
++      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => {
++        chunk.ids = standaloneIds
++          ? allocatePostgresSessionTranscriptFtsIds(db, chunk.ftsRows.length)
++          : undefined;
++        return write(chunk);
++      });
+     }
+   };
+ }
+diff --git a/src/config/zod-schema.database.ts b/src/config/zod-schema.database.ts
+--- a/src/config/zod-schema.database.ts
++++ b/src/config/zod-schema.database.ts
+@@ -41,6 +41,7 @@
+             label: "PostgreSQL Connection",
+             help: "Shared PostgreSQL DSN, required when any effective family engine is postgres. Env/file SecretRefs are qualified; TLS and exec-backed DSNs remain experimental pending live qualification. Store-backed refs cannot bootstrap the database. The host resolves it once for database workers. Connection failures never fall back to SQLite.",
+           }),
++        schemaLifecycleProvider: z.string().min(1).optional(),
+         schemaPrefix: z
+           .string()
+           .regex(/^[a-z_][a-z0-9_]{0,26}$/)
+diff --git a/src/infra/database-engine/types.ts b/src/infra/database-engine/types.ts
+--- a/src/infra/database-engine/types.ts
++++ b/src/infra/database-engine/types.ts
+@@ -1,5 +1,5 @@
+ export type DatabaseEngineInput =
+-  | Readonly<{ connection: string; schemaPrefix: string }>
++  | Readonly<{ connection: string; schemaPrefix: string; schemaLifecycle?: import("./schema-lifecycle.js").PostgresSchemaLifecycleDescriptor }>
+   | undefined;
+ export type DatabaseEngineId = "sqlite" | "postgres";
+ export type DatabaseEngineFamily =
+diff --git a/src/infra/database-engine/config.ts b/src/infra/database-engine/config.ts
+--- a/src/infra/database-engine/config.ts
++++ b/src/infra/database-engine/config.ts
+@@ -58,7 +58,28 @@
+       `${unresolvedRefReason ?? "A postgres database family requires database.postgres.connection."} Configure a resolvable PostgreSQL DSN (prefer a SecretRef).`,
+     );
+   }
++  const provider = config.database?.postgres?.schemaLifecycleProvider;
++  const schemaLifecycle = provider
++    ? (await import("./schema-lifecycle-config.js")).resolvePostgresSchemaLifecycle(
++        config,
++        provider,
++        env,
++      )
++    : undefined;
++  if (schemaLifecycle) {
++    const engines = resolveDatabaseFamilyEngines(config);
++    if (
++      Object.entries(engines).some(
++        ([family, engine]) => engine === "postgres" && family !== "agent",
++      )
++    ) {
++      throw new Error(
++        "Schema lifecycle v1 requires SQLite state and only the agent family on PostgreSQL",
++      );
++    }
++  }
+   return Object.freeze({
++    ...(schemaLifecycle ? { schemaLifecycle } : {}),
+     connection: value,
+     schemaPrefix: config.database?.postgres?.schemaPrefix ?? "openclaw",
+   });
+diff --git a/src/infra/database-engine/context.ts b/src/infra/database-engine/context.ts
+--- a/src/infra/database-engine/context.ts
++++ b/src/infra/database-engine/context.ts
+@@ -61,6 +61,8 @@
+   if (
+     previous.postgres?.connection !== next.postgres?.connection ||
+     previous.postgres?.schemaPrefix !== next.postgres?.schemaPrefix ||
++    JSON.stringify(previous.postgres?.schemaLifecycle) !==
++      JSON.stringify(next.postgres?.schemaLifecycle) ||
+     listDatabaseEngineStores().some(
+       ({ id }) => previous.effectiveEngines[id] !== next.effectiveEngines[id],
+     )
+diff --git a/src/infra/database-engine/open.ts b/src/infra/database-engine/open.ts
+--- a/src/infra/database-engine/open.ts
++++ b/src/infra/database-engine/open.ts
+@@ -12,6 +12,7 @@
+ import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
+ import { beginUpdatePostgresMigration } from "../update-doctor-migration-attribution.js";
+ import { databaseEngineAdapters } from "./adapters.js";
++import { assertEngineStoreExecutionAllowed } from "./admission-scope.js";
+ import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js";
+ import { observeConnection } from "./observation.js";
+ import { admitPostgresPhysicalFacts } from "./physical-facts.js";
+@@ -20,8 +21,15 @@
+   postgresSchemaMetadataSql,
+   getAdmittedPostgresSchema,
+   postgresStoreNamespace,
++  postgresSchemaSql,
++  verifyPreparedPostgresSchema,
+ } from "./postgres-schema.js";
+ import { admitPostgresSearch } from "./postgres-search-schema.js";
++import {
++  bindPostgresSchemaLifecycle,
++  getPostgresSchemaLifecycle,
++  schemaPreparationJournalPath,
++} from "./schema-lifecycle.js";
+ import type { DatabaseEngineInput } from "./types.js";
+ 
+ type EngineAdmission =
+@@ -84,6 +92,8 @@
+   beforeMigrate?: AdmittedStore["beforeMigrate"];
+   /** Family custody for schema writes; shared state defaults to its physical owner. */
+   assertMigrationCurrent?: () => void;
++  /** The native store owner revalidates bootstrap custody before every autocommit effect. */
++  assertBootstrapCurrent?: () => void;
+   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;
+ }): EngineConnection {
+   const { anchor } = ref;
+@@ -111,6 +121,7 @@
+     );
+   }
+   ref.prepareAnchor();
++  let createdAnchor = false;
+   const readOrCreateAnchor = () => {
+     const inspection = ref.inspectSqlite();
+     if (inspection.hasExistingData) {
+@@ -145,6 +156,7 @@
+       }
+       return { storeId: row.store_id, namespace: row.schema };
+     }
++    createdAnchor = true;
+     const storeId = randomUUID();
+     const namespace = postgresStoreNamespace(ref.input!.schemaPrefix, schema.id, storeId);
+     anchor
+@@ -178,6 +190,15 @@
+     ref.admitPostgres?.(db, fresh);
+   };
+   try {
++    const assertBootstrapCurrent = () => {
++      assertEngineStoreExecutionAllowed();
++      ref.assertBootstrapCurrent?.();
++    };
++    bindPostgresSchemaLifecycle(db, ref.input?.schemaLifecycle, assertBootstrapCurrent);
++    if (getPostgresSchemaLifecycle(db)?.derivedSearch === "unavailable") {
++      schema = { ...schema, search: undefined };
++      store.schema = schema;
++    }
+     const publishSearch = schema.search
+       ? admitPostgresSearch(
+           db,
+@@ -192,12 +213,35 @@
+       // Existing-only forbids creation; an unsealed port still needs writable schema admission.
+       let migration: ReturnType<typeof beginUpdatePostgresMigration>;
+       let assertMigrationCurrent: (() => void) | undefined;
++      const lifecycle = getPostgresSchemaLifecycle(db);
++      const preparation =
++        lifecycle && !ref.existingOnly
++          ? {
++              db,
++              namespace: identity.namespace,
++              storeId: identity.storeId,
++              store: schema.id,
++              version: schema.version,
++              ddl: postgresSchemaSql(schema, identity.namespace),
++              metadataSql: postgresSchemaMetadataSql,
++              journalPath: schemaPreparationJournalPath(anchor),
++              allowCreate: createdAnchor,
++              assertCurrent: assertBootstrapCurrent,
++            }
++          : undefined;
++      const preparedFresh = preparation ? lifecycle!.prepare(preparation).fresh : false;
++      if (preparedFresh) {
++        verifyPreparedPostgresSchema(db, identity.namespace, schema, assertBootstrapCurrent);
++        lifecycle!.beforeSeal(preparation!);
++      }
+       db.runTransaction(
+         () => {
+-          const fresh = !db
+-            .prepare("SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = ?")
+-            .get(identity.namespace);
+-          if (fresh && !ref.existingOnly) {
++          const fresh =
++            preparedFresh ||
++            !db
++              .prepare("SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = ?")
++              .get(identity.namespace);
++          if (fresh && !ref.existingOnly && !preparedFresh) {
+             db.exec(`CREATE SCHEMA IF NOT EXISTS "${identity.namespace.replaceAll('"', '""')}"`);
+             db.exec(postgresSchemaMetadataSql);
+           }
+@@ -218,7 +262,13 @@
+                 "Missing PostgreSQL metadata; restore the matching PostgreSQL schema and anchor.",
+               );
+             }
+-            adapter.schema.bootstrap(store, db);
++            if (preparedFresh) {
++              db.prepare(
++                "INSERT INTO openclaw_schema_meta (store, version, store_id) VALUES (?, ?, ?)",
++              ).run(schema.id, schema.version, identity.storeId);
++            } else {
++              adapter.schema.bootstrap(store, db);
++            }
+           } else {
+             if (meta.store_id !== identity.storeId) {
+               throw new Error(
+@@ -242,6 +292,11 @@
+                   version: Number(meta.version),
+                 };
+               } else {
++                if (lifecycle) {
++                  throw new Error(
++                    "Schema lifecycle v1 does not support migrations; use the matching OpenClaw build and retain the schema, anchor and preparation journal",
++                  );
++                }
+                 assertMigrationCurrent = ref.assertMigrationCurrent;
+                 assertMigrationCurrent?.();
+                 migration = beginUpdatePostgresMigration(db, assertMigrationCurrent);
+@@ -265,6 +320,9 @@
+         },
+         {
+           withCommit(commit) {
++            if (preparedFresh) {
++              assertBootstrapCurrent();
++            }
+             assertMigrationCurrent?.();
+             migration?.beforeCommit();
+             commit();
+@@ -272,6 +330,9 @@
+         },
+         false,
+       );
++      if (preparedFresh) {
++        lifecycle!.afterSeal(preparation!);
++      }
+       migration?.committed();
+     } else {
+       admit(false);
+@@ -293,6 +354,14 @@
+         schema.postgresVectorSearchVersion,
+       )?.();
+     }
++    getPostgresSchemaLifecycle(db)?.activateRuntime({
++      db,
++      namespace: identity.namespace,
++      store: schema.id,
++      storeId: identity.storeId,
++      version: schema.version,
++      assertCurrent: assertBootstrapCurrent,
++    });
+     return db;
+   } catch (error) {
+     if (ref.closeOnFailure) {
+diff --git a/src/infra/database-engine/postgres-schema.ts b/src/infra/database-engine/postgres-schema.ts
+--- a/src/infra/database-engine/postgres-schema.ts
++++ b/src/infra/database-engine/postgres-schema.ts
+@@ -13,6 +13,7 @@
+   type PostgresCatalogFact,
+ } from "./postgres-catalog.js";
+ import { postgresSearchSql } from "./postgres-search-schema.js";
++import { getPostgresSchemaLifecycle } from "./schema-lifecycle.js";
+ 
+ export type { PostgresCapabilities } from "./physical-facts-contract.js";
+ 
+@@ -216,6 +217,11 @@
+   if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash === hash(ddl)) {
+     return;
+   }
++  if (getPostgresSchemaLifecycle(db)) {
++    throw new Error(
++      "Schema lifecycle v1 requires a current sealed schema; migration or drift verification needs offline preparation",
++    );
++  }
+   // Inspection may compare reconstructed source DDL without rewriting the installed seal.
+   if (preserveSeal) {
+     db.runTransaction(() => verifyPostgresSchemaDefinition(db, namespace, schema, snapshot));
+@@ -271,3 +277,37 @@
+   });
+   return snapshot;
+ }
++
++/** Prepare-time comparison stays outside DDL transactions; core still owns catalogs and seals. */
++export function verifyPreparedPostgresSchema(
++  db: PostgresSqlConnection,
++  namespace: string,
++  schema: StoreSchema,
++  assertCurrent: () => void,
++): void {
++  const provider = getPostgresSchemaLifecycle(db);
++  if (!provider || db.isTransaction) {
++    throw new Error("PostgreSQL schema preparation requires its provider outside a transaction");
++  }
++  const read = (name: string) => {
++    const row = db.query(`SELECT catalog::text FROM (${postgresCatalogQuery(name, true)}) captured`)
++      .rows[0];
++    return readPostgresCatalog(JSON.parse(String(row?.catalog)));
++  };
++  const actual = postgresSchemaFingerprint(read(namespace));
++  // Keep disposable verification effects inside the target's cleanup scope.
++  const scratch = `${namespace.slice(0, 40)}_check_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
++  assertCurrent();
++  db.exec(`CREATE SCHEMA ${quote(scratch)}`);
++  try {
++    assertCurrent();
++    db.exec(`SET search_path TO ${quote(scratch)}`);
++    provider.executeFreshDdl({ db, ddl: postgresSchemaSql(schema, scratch), assertCurrent });
++    if (postgresSchemaFingerprint(read(scratch), { from: scratch, to: namespace }) !== actual) {
++      throw new Error(`PostgreSQL prepared schema differs from generated DDL. ${recovery}`);
++    }
++  } finally {
++    db.exec(`SET search_path TO ${quote(namespace)}`);
++    db.exec(`DROP SCHEMA ${quote(scratch)} CASCADE`);
++  }
++}
+diff --git a/src/infra/database-engine/postgres-search-schema.ts b/src/infra/database-engine/postgres-search-schema.ts
+--- a/src/infra/database-engine/postgres-search-schema.ts
++++ b/src/infra/database-engine/postgres-search-schema.ts
+@@ -6,6 +6,7 @@
+ } from "../sqlite-database-admission.js";
+ import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
+ import type { SearchSchema } from "./contract.js";
++import { getPostgresSchemaLifecycle } from "./schema-lifecycle.js";
+ 
+ export const pgSearchName = (name: string) => `"${name.replaceAll('"', '""')}"`;
+ export const searchConfig = "openclaw_simple_unaccent";
+@@ -156,6 +157,12 @@
+   db: PostgresSqlConnection,
+   schema: SearchSchema,
+ ): void {
++  if (getPostgresSchemaLifecycle(db)?.derivedSearch === "unavailable") {
++    throw new DatabaseSearchCapabilityUnavailableError(
++      "fullText",
++      "The selected PostgreSQL schema lifecycle provider does not support derived search; native conversation storage remains available.",
++    );
++  }
+   if (
+     !db.isOpen ||
+     !getSqliteDatabaseAdmission(db, key)?.some((fact) => fact.signature === JSON.stringify(schema))
+diff --git a/src/infra/database-engine/search-extension.ts b/src/infra/database-engine/search-extension.ts
+--- a/src/infra/database-engine/search-extension.ts
++++ b/src/infra/database-engine/search-extension.ts
+@@ -20,6 +20,7 @@
+   postgresSearchSql,
+   publishPostgresSearch,
+ } from "./postgres-search-schema.js";
++import { getPostgresSchemaLifecycle } from "./schema-lifecycle.js";
+ import { bindStoreSearch } from "./search.js";
+ import { admitSqliteMemoryVectorSearch } from "./sqlite-memory-vector-schema.js";
+ import { admitSqliteMemoryTextSearch } from "./sqlite-search-schema.js";
+@@ -71,6 +72,9 @@
+     throw new SearchExtensionDefinitionChangedError(
+       `Search extension ${name} changed. Restore its previous definition, or rebuild the derived extension from canonical source data before using the new definition.`,
+     );
++  }
++  if (getPostgresSchemaLifecycle(db)) {
++    throw new Error("Schema lifecycle v1 requires offline preparation for new search extensions");
+   }
+   db.runTransaction(() => {
+     admitPostgresSearch(db, definition, facts.namespace, base.postgresVectorSearchVersion);
+diff --git a/src/infra/database-engine/port-command.worker.ts b/src/infra/database-engine/port-command.worker.ts
+--- a/src/infra/database-engine/port-command.worker.ts
++++ b/src/infra/database-engine/port-command.worker.ts
+@@ -155,6 +155,11 @@
+   task: Extract<DatabasePortTask, { operation: "preflight" }>,
+   assertCurrent: () => void,
+ ) {
++  if (task.config.database?.postgres?.schemaLifecycleProvider) {
++    throw new Error(
++      "Schema lifecycle v1 does not support database port; retain the matching schema, anchor and preparation journal",
++    );
++  }
+   return withDatabasePortConnection(task.config, async (db) => {
+     await readPostgresPortCapabilities(db, {
+       minimumPostgresVersion: Math.max(
+diff --git a/src/plugins/manifest-types.ts b/src/plugins/manifest-types.ts
+--- a/src/plugins/manifest-types.ts
++++ b/src/plugins/manifest-types.ts
+@@ -466,6 +466,8 @@
+    * auth/catalog discovery. It should not import the full plugin runtime.
+    */
+   providerCatalogEntry?: string;
++  /** Versioned pre-boot PostgreSQL schema lifecycle module, relative to plugin root. */
++  postgresSchemaLifecycle?: string;
+   /** Lightweight capability descriptor collections; omitted families retain register() discovery. */
+   capabilityCatalogEntry?: string;
+   /**
+diff --git a/src/plugins/manifest.ts b/src/plugins/manifest.ts
+--- a/src/plugins/manifest.ts
++++ b/src/plugins/manifest.ts
+@@ -411,6 +411,7 @@
+     providers,
+     ...(raw.managesOwnAvailability === true ? { managesOwnAvailability: true } : {}),
+     providerCatalogEntry: normalizeOptionalString(raw.providerCatalogEntry),
++    postgresSchemaLifecycle: normalizeOptionalString(raw.postgresSchemaLifecycle),
+     capabilityCatalogEntry:
+       raw.capabilityCatalogEntry === undefined
+         ? undefined
+diff --git a/src/plugins/manifest-record.ts b/src/plugins/manifest-record.ts
+--- a/src/plugins/manifest-record.ts
++++ b/src/plugins/manifest-record.ts
+@@ -269,7 +269,9 @@
+   trust: PluginTrust;
+ }): PluginManifestRecord {
+   const pluginId = params.candidate.effectivePluginId ?? params.manifest.id;
+-  const resolveCatalogEntry = (entryName: "providerCatalogEntry" | "capabilityCatalogEntry") => {
++  const resolveCatalogEntry = (
++    entryName: "providerCatalogEntry" | "capabilityCatalogEntry" | "postgresSchemaLifecycle",
++  ) => {
+     const entry = params.manifest[entryName];
+     if (entry === undefined) {
+       return undefined;
+@@ -383,6 +385,7 @@
+     providers: params.manifest.providers ?? [],
+     managesOwnAvailability: params.manifest.managesOwnAvailability,
+     providerDiscoverySource: resolveCatalogEntry("providerCatalogEntry"),
++    postgresSchemaLifecycle: resolveCatalogEntry("postgresSchemaLifecycle"),
+     capabilityCatalogSource:
+       params.manifest.capabilityCatalogEntry === undefined
+         ? undefined
+diff --git a/src/plugin-sdk/database-engine-runtime.ts b/src/plugin-sdk/database-engine-runtime.ts
+--- a/src/plugin-sdk/database-engine-runtime.ts
++++ b/src/plugin-sdk/database-engine-runtime.ts
+@@ -8,3 +8,5 @@
+   openEngineWorkerStore,
+   runEngineStoreOperation,
+ } from "../infra/database-engine/worker-store.js";
++
++export type { PostgresSchemaLifecycleV1 } from "../infra/database-engine/schema-lifecycle.js";
+diff --git a/src/state/openclaw-agent-db-engine.ts b/src/state/openclaw-agent-db-engine.ts
+--- a/src/state/openclaw-agent-db-engine.ts
++++ b/src/state/openclaw-agent-db-engine.ts
+@@ -345,6 +345,7 @@
+   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never,
+   /** Short read-only leases may retain an idle PostgreSQL transport in this worker. */
+   reusePostgresConnection = false,
++  assertBootstrapCurrent?: () => void,
+ ) {
+   if (agentId === undefined && !existingOnly) {
+     throw new Error("Creating an agent database requires an agent owner");
+@@ -357,6 +358,7 @@
+     reusePostgresConnection,
+     closeOnFailure,
+     assertMigrationCurrent: assertAgentDatabaseMaintenanceAuthority,
++    assertBootstrapCurrent,
+     prepareAnchor: () => {},
+     openSqlite: () => {},
+     inspectSqlite: () => {
+diff --git a/src/state/openclaw-agent-db.ts b/src/state/openclaw-agent-db.ts
+--- a/src/state/openclaw-agent-db.ts
++++ b/src/state/openclaw-agent-db.ts
+@@ -209,9 +209,21 @@
+       }
+     }
+   };
+-  assertCurrent();
+-  assertAgentCreationClaimCurrent(databaseOptions);
+-  getAgentDeletionDatabaseCleanup(databaseOptions)?.assertCurrent();
++  const assertBootstrapCurrent = () => {
++    assertCurrent();
++    if (pending) {
++      pending.controller.signal.throwIfAborted();
++      if (cache.pending.get(pathname) !== pending) {
++        throw new Error(`Agent database open was replaced: ${pathname}`);
++      }
++      pending.assertHeld?.();
++    }
++    assertAgentDatabaseResourceAdmission({ agentId, path: pathname });
++    assertAgentDatabaseAdmitted(agentId, { env: databaseOptions.env });
++    assertAgentCreationClaimCurrent(databaseOptions);
++    getAgentDeletionDatabaseCleanup(databaseOptions)?.assertCurrent();
++  };
++  assertBootstrapCurrent();
+   // A live successful cache entry is authoritative; failed entries remain only for disposal.
+   const opened = getOpenClawAgentDatabaseIfOpen(databaseOptions);
+   if (opened) {
+@@ -374,10 +386,18 @@
+             },
+           );
+         }
+-        selected = openAgentEngineStore(db, agentId, pathname, false, (connection, error) => {
+-          selected = openedDb = connection;
+-          throw error;
+-        });
++        selected = openAgentEngineStore(
++          db,
++          agentId,
++          pathname,
++          false,
++          (connection, error) => {
++            selected = openedDb = connection;
++            throw error;
++          },
++          false,
++          assertBootstrapCurrent,
++        );
+         openedDb = selected;
+         walMaintenance = {
+           checkpoint: () => false,
+@@ -490,7 +510,15 @@
+           );
+         }
+         finishPhase("schema");
+-        selected = openAgentEngineStore(db, agentId, pathname);
++        selected = openAgentEngineStore(
++          db,
++          agentId,
++          pathname,
++          false,
++          undefined,
++          false,
++          assertBootstrapCurrent,
++        );
+       }
+     } catch (err) {
+       if (diagnostics.integrityGateOutcome === "failed") {
+diff --git a/src/infra/database-engine/schema-lifecycle.ts b/src/infra/database-engine/schema-lifecycle.ts
+new file mode 100644
+--- /dev/null
++++ b/src/infra/database-engine/schema-lifecycle.ts
+@@ -0,0 +1,132 @@
++import fs from "node:fs";
++import { createRequire } from "node:module";
++import path from "node:path";
++import type { DatabaseSync } from "node:sqlite";
++import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
++import { openPluginRootFileSync } from "../../plugins/path-safety.js";
++import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
++import type { PostgresSqlConnection } from "../sql-connection.js";
++import { assertEngineStoreExecutionAllowed } from "./admission-scope.js";
++
++/** Serializable manifest-owned source captured before database workers start. */
++export type PostgresSchemaLifecycleDescriptor = Readonly<{
++  pluginId: string;
++  modulePath: string;
++  boundaryRoot: string;
++  origin: PluginOrigin;
++  rejectHardlinks: boolean;
++}>;
++
++/** Experimental v1: fresh agent bootstrap only; runtime transactions remain core-owned. */
++export interface PostgresSchemaLifecycleV1 {
++  version: 1;
++  derivedSearch: "unavailable";
++  sequenceAllocation: "standalone";
++  initializeConnection(input: { db: PostgresSqlConnection; assertCurrent: () => void }): void;
++  activateRuntime(input: {
++    db: PostgresSqlConnection;
++    namespace: string;
++    store: string;
++    storeId: string;
++    version: number;
++    assertCurrent: () => void;
++  }): void;
++  beforeSeal(input: PostgresSchemaPreparation): void;
++  afterSeal(input: PostgresSchemaPreparation): void;
++  prepare(input: PostgresSchemaPreparation): { fresh: boolean };
++  executeFreshDdl(input: {
++    db: PostgresSqlConnection;
++    ddl: string;
++    assertCurrent: () => void;
++  }): void;
++}
++
++export type PostgresSchemaPreparation = {
++  db: PostgresSqlConnection;
++  namespace: string;
++  storeId: string;
++  store: string;
++  version: number;
++  ddl: string;
++  metadataSql: string;
++  journalPath: string;
++  allowCreate: boolean;
++  assertCurrent: () => void;
++};
++
++const require = createRequire(import.meta.url);
++const providers = new WeakMap<PostgresSqlConnection, PostgresSchemaLifecycleV1>();
++
++export function bindPostgresSchemaLifecycle(
++  db: PostgresSqlConnection,
++  descriptor?: PostgresSchemaLifecycleDescriptor,
++  assertCurrent: () => void = assertEngineStoreExecutionAllowed,
++): void {
++  if (!descriptor) {
++    return;
++  }
++  if (![".mjs", ".cjs", ".js"].includes(path.extname(descriptor.modulePath))) {
++    throw new Error("Pre-boot schema lifecycle artifacts must be built JavaScript");
++  }
++  const opened = openPluginRootFileSync({
++    filePath: descriptor.modulePath,
++    rootPath: descriptor.boundaryRoot,
++    rejectHardlinks: descriptor.rejectHardlinks,
++  });
++  if (!opened.ok) {
++    throw new Error("Cannot open PostgreSQL schema lifecycle artifact", { cause: opened.error });
++  }
++  fs.closeSync(opened.fd);
++  if (!sameFileIdentity(opened.exactIdentity, fs.statSync(opened.path, { bigint: true }))) {
++    throw new Error("PostgreSQL schema lifecycle artifact changed after validation");
++  }
++  const module: unknown = require(opened.path);
++  if (typeof module !== "object" || module === null) {
++    throw new Error("Invalid PostgreSQL schema lifecycle module");
++  }
++  const provider = "default" in module ? module.default : undefined;
++  if (
++    typeof provider !== "object" ||
++    provider === null ||
++    !("version" in provider) ||
++    provider.version !== 1 ||
++    !("derivedSearch" in provider) ||
++    provider.derivedSearch !== "unavailable" ||
++    !("sequenceAllocation" in provider) ||
++    provider.sequenceAllocation !== "standalone" ||
++    !("initializeConnection" in provider) ||
++    typeof provider.initializeConnection !== "function" ||
++    !("activateRuntime" in provider) ||
++    typeof provider.activateRuntime !== "function" ||
++    !("prepare" in provider) ||
++    typeof provider.prepare !== "function" ||
++    !("beforeSeal" in provider) ||
++    typeof provider.beforeSeal !== "function" ||
++    !("afterSeal" in provider) ||
++    typeof provider.afterSeal !== "function" ||
++    !("executeFreshDdl" in provider) ||
++    typeof provider.executeFreshDdl !== "function"
++  ) {
++    throw new Error(
++      `Plugin ${descriptor.pluginId} has no valid PostgreSQL schema lifecycle v1 export`,
++    );
++  }
++  const lifecycle = provider as PostgresSchemaLifecycleV1;
++  lifecycle.initializeConnection({ db, assertCurrent });
++  providers.set(db, lifecycle);
++}
++
++export function getPostgresSchemaLifecycle(db: PostgresSqlConnection) {
++  return providers.get(db);
++}
++
++export function schemaPreparationJournalPath(anchor: DatabaseSync): string {
++  const file = anchor
++    .prepare("PRAGMA database_list")
++    .all()
++    .find((row) => row.name === "main")?.file;
++  if (typeof file !== "string" || !file) {
++    throw new Error("Schema lifecycle preparation requires a persistent SQLite identity anchor");
++  }
++  return `${file}.schema-preparation.sqlite`;
++}
+diff --git a/src/infra/database-engine/schema-lifecycle-config.ts b/src/infra/database-engine/schema-lifecycle-config.ts
+new file mode 100644
+--- /dev/null
++++ b/src/infra/database-engine/schema-lifecycle-config.ts
+@@ -0,0 +1,42 @@
++import path from "node:path";
++import type { OpenClawConfig } from "../../config/types.js";
++import { normalizePluginsConfigWithResolver } from "../../plugins/config-policy.js";
++import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
++import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
++import type { PostgresSchemaLifecycleDescriptor } from "./schema-lifecycle.js";
++
++export function resolvePostgresSchemaLifecycle(
++  config: OpenClawConfig,
++  pluginId: string,
++  env: NodeJS.ProcessEnv,
++): PostgresSchemaLifecycleDescriptor {
++  const policy = normalizePluginsConfigWithResolver(config.plugins);
++  if (
++    !policy.enabled ||
++    policy.entries[pluginId]?.enabled !== true ||
++    policy.deny.includes(pluginId) ||
++    (policy.allow.length > 0 && !policy.allow.includes(pluginId))
++  ) {
++    throw new Error(
++      `PostgreSQL schema lifecycle plugin ${pluginId} must be explicitly enabled and allowed`,
++    );
++  }
++  // Before database boot, discover configured plugin roots without consulting its installed-state DB.
++  const registry = loadPluginManifestRegistryCore({ config, env, installRecords: {} });
++  const matches = registry.plugins.filter((plugin) => plugin.id === pluginId);
++  const plugin = matches.length === 1 ? matches[0] : undefined;
++  if (!plugin?.postgresSchemaLifecycle) {
++    throw new Error(`Plugin ${pluginId} does not declare a PostgreSQL schema lifecycle module`);
++  }
++  return Object.freeze({
++    pluginId,
++    modulePath: path.resolve(plugin.rootDir, plugin.postgresSchemaLifecycle),
++    boundaryRoot: plugin.rootDir,
++    origin: plugin.origin,
++    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
++      origin: plugin.origin,
++      rootDir: plugin.rootDir,
++      env,
++    }),
++  });
++}
+diff --git a/src/infra/database-engine/schema-lifecycle.test.ts b/src/infra/database-engine/schema-lifecycle.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/infra/database-engine/schema-lifecycle.test.ts
+@@ -0,0 +1,85 @@
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { afterEach, expect, it } from "vitest";
++import { resolveDatabaseEngineSelection } from "./config.js";
++const roots: string[] = [];
++afterEach(() => {
++  for (const root of roots.splice(0)) {
++    fs.rmSync(root, { recursive: true, force: true });
++  }
++});
++const connection = "postgres://synthetic@localhost/test";
++function fixture() {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-lifecycle-"));
++  roots.push(root);
++  fs.writeFileSync(
++    path.join(root, "package.json"),
++    JSON.stringify({
++      name: "synthetic-neki",
++      version: "1.0.0",
++      type: "module",
++      openclaw: { extensions: ["./index.mjs"] },
++    }),
++  );
++  fs.writeFileSync(
++    path.join(root, "index.mjs"),
++    'throw new Error("runtime must not execute during config resolution")',
++  );
++  fs.writeFileSync(
++    path.join(root, "profile.mjs"),
++    'throw new Error("provider must not execute on host")',
++  );
++  fs.writeFileSync(
++    path.join(root, "openclaw.plugin.json"),
++    JSON.stringify({
++      id: "synthetic-neki",
++      categories: ["infrastructure"],
++      configSchema: { type: "object", properties: {} },
++      postgresSchemaLifecycle: "./profile.mjs",
++    }),
++  );
++  return {
++    root,
++    config: {
++      database: {
++        engine: "sqlite" as const,
++        families: { agent: { engine: "postgres" as const } },
++        postgres: { connection, schemaLifecycleProvider: "synthetic-neki" },
++      },
++      plugins: {
++        enabled: true,
++        allow: ["synthetic-neki"],
++        load: { paths: [root] },
++        entries: { "synthetic-neki": { enabled: true } },
++      },
++    },
++  };
++}
++it("captures only manifest metadata before boot and serializes descriptor to workers", async () => {
++  const { root, config } = fixture();
++  const selected = await resolveDatabaseEngineSelection(config);
++  expect(selected.postgres?.schemaLifecycle).toMatchObject({
++    pluginId: "synthetic-neki",
++    modulePath: path.join(root, "profile.mjs"),
++    boundaryRoot: root,
++  });
++  expect(structuredClone(selected).postgres?.schemaLifecycle).toEqual(
++    selected.postgres?.schemaLifecycle,
++  );
++});
++it("refuses disabled providers and non-agent PostgreSQL families before boot", async () => {
++  const { config } = fixture();
++  config.plugins.entries["synthetic-neki"].enabled = false;
++  await expect(resolveDatabaseEngineSelection(config)).rejects.toThrow(/explicitly enabled/);
++  config.plugins.entries["synthetic-neki"].enabled = true;
++  await expect(
++    resolveDatabaseEngineSelection({
++      ...config,
++      database: {
++        ...config.database,
++        families: { state: { engine: "postgres" }, agent: { engine: "postgres" } },
++      },
++    }),
++  ).rejects.toThrow(/only the agent family/);
++});

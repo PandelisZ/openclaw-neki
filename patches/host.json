@@ -1,0 +1,113 @@
+{
+  "baseRepository": "https://github.com/openclaw/openclaw",
+  "baseCommit": "d7349d9395e2bde0f42882a9f7ef8afab59e19c3",
+  "patch": "openclaw-d7349d9-schema-lifecycle.patch",
+  "patchSha256": "ece312e0d64122b7020efc17e5cf2af7638e974e6628939ab4da7dcd5f3edccd",
+  "files": [
+    {
+      "path": "src/config/sessions/session-transcript-fts.neki.test.ts",
+      "beforeSha256": null,
+      "afterSha256": "c3436fd57b66f412e79264ea8908d4fed7f81589640db4688ad74e4a00a83ae0"
+    },
+    {
+      "path": "src/config/sessions/session-transcript-fts.ts",
+      "beforeSha256": "d722d70a38934e96700f8d856fb96d7c4156a5bc8e886a0da924fc60ece96410",
+      "afterSha256": "59cacb8dd65cf8f7ea238a33d9353cae8b27449c6790e8237ba85b78647151f0"
+    },
+    {
+      "path": "src/config/sessions/session-transcript-index-postgres.ts",
+      "beforeSha256": "e85ad426ebf7b02007c165a87bf82b17ad1d9d2657d202104e487d7406802962",
+      "afterSha256": "68a4d1bfd713bcd4674540db92c4b439519f3c4b8e663747fb86150a47d31ac6"
+    },
+    {
+      "path": "src/config/zod-schema.database.ts",
+      "beforeSha256": "7f3491e84324da4baf66f253d959a8bc45051041f96b9d9ca6c0b6622b9b6582",
+      "afterSha256": "33e7e0df70ad83b4ff9821996a6265657ba4383b2dc29b2ff13f8849138451fa"
+    },
+    {
+      "path": "src/infra/database-engine/types.ts",
+      "beforeSha256": "2fd971bc9da938da5adf74cbb08b98dc436b4d87549806bd46cba5bef7cd6f9a",
+      "afterSha256": "f1024fca58f543cd691223fc7659e0aa4e19adc3134612c8f7b208c0ed1028c1"
+    },
+    {
+      "path": "src/infra/database-engine/config.ts",
+      "beforeSha256": "845a658c7abbf31d616a91e11f53f213d7d023c7a09f64bea6d1e8f5cacc4c25",
+      "afterSha256": "639f9fd9935d1428d6ab51f1945a2223eb46ffce97f74c6dbe83a0f6b6e2726d"
+    },
+    {
+      "path": "src/infra/database-engine/context.ts",
+      "beforeSha256": "7cfe9a530ed92ec92752a99e31508e4effcf5a7833246eab526142f088382bfb",
+      "afterSha256": "c7e57b73cd6d6c41af24c3ff29e73d63202bf5c7083c0d7d2f71375e63012b2f"
+    },
+    {
+      "path": "src/infra/database-engine/open.ts",
+      "beforeSha256": "83143a5aaeac9290635d08c713a6779923dfd4050290fe0f8bdd250ae34bbefc",
+      "afterSha256": "11e00da642d384fba5357d9b80ca00385addbe5a5053093973e89edca81497e7"
+    },
+    {
+      "path": "src/infra/database-engine/postgres-schema.ts",
+      "beforeSha256": "3a6ca2dbdfa69ed8b3b980f866d65698d0c645f7088be83a0f97b9afe90d90f4",
+      "afterSha256": "4e46fc0b4ddd08a5798e8a92f1963cf48fa95cb996361f3977aa249ff562bd09"
+    },
+    {
+      "path": "src/infra/database-engine/postgres-search-schema.ts",
+      "beforeSha256": "02ce34a41ca83de5621e21f1a1bf70c9827fcc42a7ea822f62312de4a24c1f4d",
+      "afterSha256": "2587b43c5cb1d96669f498eb7f087588cb4358dee55a40335133dbf7f57b15ce"
+    },
+    {
+      "path": "src/infra/database-engine/search-extension.ts",
+      "beforeSha256": "ba0246092a9b5daab52c0494450be599539a65412a01a881b249fdbb6b6f7057",
+      "afterSha256": "6fd679940776acc5b3a75d21f036eecc96beaf83c369ccfb820cef45df54989b"
+    },
+    {
+      "path": "src/infra/database-engine/port-command.worker.ts",
+      "beforeSha256": "a88fc7b5d75e90cb3b57ba1327052f083eafdac1903879f832684f04e28b8063",
+      "afterSha256": "ccc4bf9140f3060036f0eff606f1c15a5800561b8f0edc9593b88ec981e6c514"
+    },
+    {
+      "path": "src/plugins/manifest-types.ts",
+      "beforeSha256": "63ffa3c40c42fba53dbaeb6367c9cbd9b8edf7dc57acaabb56471e520ebd883f",
+      "afterSha256": "42e1fe4d44a672b0a0eebd15cd748e27f1928972af0bb4ac9a56123ecec22954"
+    },
+    {
+      "path": "src/plugins/manifest.ts",
+      "beforeSha256": "2402bce152c91dacefeb047ac07cca7523a9f4ddf198b907afdbfea7fbbb60a3",
+      "afterSha256": "07539fad15a90dcd268d34bc7986638676ff3dde0a40c8a1116161853d25f3e8"
+    },
+    {
+      "path": "src/plugins/manifest-record.ts",
+      "beforeSha256": "aba6285036ba9f42679a2fd7870964783ea417ff2410ba8246b75ffb3ba7574d",
+      "afterSha256": "6de664f2e98f4573ab993182e8f97c9f7a062293526578c75f8c4f9f5db48db9"
+    },
+    {
+      "path": "src/plugin-sdk/database-engine-runtime.ts",
+      "beforeSha256": "3fabd603c979b90d6448a41f49cc1cca3de3d692af52be1688d7ea39e7689bb9",
+      "afterSha256": "2a03bebae63166401ec4993428d599f34e39db04bee474fb8710c4e3724af0c0"
+    },
+    {
+      "path": "src/state/openclaw-agent-db-engine.ts",
+      "beforeSha256": "81e8599bb9a298a974a2b96ec3942c1f00bedc84d7420f6fe4ee61880c0fd563",
+      "afterSha256": "becce79e7012bb6b9c0040b151b7dfe5658fbd781851825ebb7e18a30bfa83c2"
+    },
+    {
+      "path": "src/state/openclaw-agent-db.ts",
+      "beforeSha256": "33de7e73ab849eb16e1c8837b7f1b40309a20d8a66bc94c838df596e8ce3e16c",
+      "afterSha256": "73051f1fede0040f99f5d428cada3e429f5b7e1c90b346a0bf7f147465fda0d9"
+    },
+    {
+      "path": "src/infra/database-engine/schema-lifecycle.ts",
+      "beforeSha256": null,
+      "afterSha256": "37381c13ff93c50fc8f1ea692548d0e07c03194c2302786d53dfa335da8cc96b"
+    },
+    {
+      "path": "src/infra/database-engine/schema-lifecycle-config.ts",
+      "beforeSha256": null,
+      "afterSha256": "f72fefe88c169205e66626fee4b1aca25654f1ed8c5d4550816309ca7172b5ba"
+    },
+    {
+      "path": "src/infra/database-engine/schema-lifecycle.test.ts",
+      "beforeSha256": null,
+      "afterSha256": "7bb2dbd0dd52b5d22ae8cb88cfc5a5ee8a24686a17ab3973a31a4f7f587313f0"
+    }
+  ]
+}
