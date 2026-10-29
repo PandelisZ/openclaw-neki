@@ -28,3 +28,9 @@ A potential upstream report should include only synthetic SQL and minimized erro
 Single-shard direct routing allowed snapshot export in a separate probe, but schema creation and text-search configuration DDL were rejected while a direct target was set. The alpha therefore uses normal routing for bootstrap and a verified, explicit shard target after native admission for runtime data. It is limited to the approved one-shard topology. See [documented shard targeting restrictions](https://planetscale.com/docs/neki/shard-targeting-fanout).
 
 Published after the searches above: [OpenClaw feature request #187149](https://github.com/openclaw/openclaw/issues/187149). The implementation repository is public. A core OpenClaw pull request has not been opened; the proposal asks for maintainer guidance on the extension boundary.
+
+## First feedback and follow-up
+
+The [ClawSweeper review](https://github.com/openclaw/openclaw/issues/187149#issuecomment-6485265065) kept the issue open and confirmed the missing plugin surface. It requested storage-owner judgment on a minimal generic loading/custody/recovery contract and noted the absence of current-main live evidence. It is an automated advisory review, not maintainer acceptance.
+
+The current-main evidence gap is now addressed at snapshot `34625635a1c04944ca68d2897f68fb24866e5552`: stock native bootstrap reproduced the Neki failure, and the patched snapshot passed real conversation, separate-process restart, assistant history and context recall checks. See [verification](verification.md#current-main-follow-up). The [contract proposal](lifecycle-contract.md) documents the current implementation's boundaries and failure states. A storage-owner product/API decision remains outstanding; a core implementation PR has not been opened.

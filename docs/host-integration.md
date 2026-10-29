@@ -13,6 +13,8 @@ This repository contains a Neki schema lifecycle extension and a version-pinned 
 
 This milestone does not support distributing a conversation across shards, changing shard topology underneath a running instance, or claiming equivalent search behavior. Normal data transactions, rollback, savepoints, owner checks, and metadata sealing stay with OpenClaw.
 
+The [proposed lifecycle contract](lifecycle-contract.md) records loading, ownership, effect receipts, recovery outcomes, and qualification requirements for storage-owner review.
+
 ## How initialization works
 
 OpenClaw resolves the explicitly enabled plugin's `postgresSchemaLifecycle` manifest artifact before selecting database workers. The descriptor contains only a vetted module location and root boundary. Workers load the dedicated built JavaScript artifact, without loading the ordinary plugin registry during store opening.
@@ -28,6 +30,14 @@ Unknown DDL outcomes and interrupted sealing require manual recovery. They are r
 ## Configuration for a disposable test instance
 
 Use the exact upstream commit recorded in `patches/host.json` in a separate, task-owned checkout. Install its dependencies using upstream instructions, apply the patch with `scripts/apply-host-patch.mjs`, and install this package's dependencies with `mise exec -- pnpm install --frozen-lockfile`.
+
+To qualify the separately pinned main snapshot `34625635a1c04944ca68d2897f68fb24866e5552`, use:
+
+```sh
+mise exec -- node scripts/apply-host-patch.mjs /absolute/path/to/main-snapshot --profile main-3462563
+```
+
+Set `OPENCLAW_HOST_PROFILE=main-3462563` together with the normal live-test environment. This selects a bundled, hash-verified profile; it does not relax the base-commit or file checks. Keep the source checkout on that exact commit. The original default profile remains supported.
 
 The configured Neki role needs DDL permissions in the test database. Supply the connection as `NEKI_DATABASE_URL` and the approved SQL shard UID as `NEKI_RUNTIME_SHARD_UID`; do not put credentials or provider identifiers in committed configuration. Use a fresh, isolated OpenClaw state directory and workspace. The extension does not create databases, provision paid infrastructure, alter credentials, or change topology. Selecting a shard UID is an operator decision; `NEKI_SINGLE_SHARD=1` acknowledges it for the harness and does not inspect physical topology.
 

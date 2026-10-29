@@ -27,6 +27,8 @@ mise exec -- node scripts/apply-host-patch.mjs /absolute/path/to/pinned/openclaw
 
 The patch applies only to upstream commit `d7349d9395e2bde0f42882a9f7ef8afab59e19c3`. It checks the original file hashes and refuses a different or modified base. Install the host's dependencies using its own instructions.
 
+An additional explicit profile, `main-3462563`, targets OpenClaw main snapshot `34625635a1c04944ca68d2897f68fb24866e5552`. Apply it with `--profile main-3462563` and set `OPENCLAW_HOST_PROFILE=main-3462563` for live qualification. The default pin stays unchanged.
+
 Configure `NEKI_DATABASE_URL`, `NEKI_RUNTIME_SHARD_UID`, and an isolated instance as described in [host integration](docs/host-integration.md). The shard UID is the provider's SQL shard name, not its API resource ID. Obtain and confirm it through your authorized administrative tooling; the extension does not guess or create it.
 
 For an opt-in live test, also supply `OPENAI_API_KEY`, `OPENCLAW_SOURCE_DIR` pointing to that patched checkout, and `NEKI_SINGLE_SHARD=1` after confirming topology:
