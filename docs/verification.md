@@ -26,3 +26,15 @@ Earlier investigation results remain reproducible capability limits: routed snap
 The broad upstream typecheck was stopped due to memory pressure. The successful bounded check covered changed host entry points and their imported source graph with upstream declarations included. No full upstream test suite, packaged build, Bun runtime, migration, port, backup restore, failover, multi-shard, or production qualification is claimed.
 
 Private raw operational evidence remains outside Git. The public harness creates its own evidence directory and prints a compact outcome report. A failed or skipped live check is never reported as a working backend.
+
+## Current-main follow-up
+
+In response to the [first upstream review](https://github.com/openclaw/openclaw/issues/187149#issuecomment-6485265065), OpenClaw main was fetched on 2026-10-28 and pinned at [`34625635a1c04944ca68d2897f68fb24866e5552`](https://github.com/openclaw/openclaw/commit/34625635a1c04944ca68d2897f68fb24866e5552). This is an explicit snapshot, not a floating compatibility claim.
+
+- Unmodified native agent initialization on real Neki reproduced `NK013 [817]`: dependent `session_conversations` DDL was not visible to the router within its transaction. The process exited and its disposable schemas were absent after cleanup.
+- The existing host patch applied cleanly. The bundled `main-3462563` profile records the exact base commit and all 21 before/after file hashes; the original default profile is preserved. Wrong-profile application was refused before effects, and correct-profile guarded application passed.
+- The patched snapshot passed the strict two-process Gateway harness: `nativeConversation=true`, `restartHistory=true`, `modelContextAfterProcessRestart=true`, `cleanup=complete`.
+- An independent PostgreSQL query between turns found the exact first assistant reply in the native Neki transcript content. Both model turns used `openai/gpt-4.1-mini` on Node.js 26.12.1.
+- All 41 extension tests, 18 focused current-main host tests, the scoped current-main typecheck, and fresh independent review passed.
+
+The [proposed lifecycle contract](lifecycle-contract.md) makes the loading boundary, responsibility split, effect receipts, recovery decisions, and qualification requirements explicit for storage-owner review. The unresolved upstream decision is acceptance of that generic seam. This follow-up does not qualify migrations, porting, restore, failover, Bun, topology changes, multi-shard behavior, a packaged build, or production use.

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import { connectionFromEnv, createClient, errorCode } from '../src/connection.mjs';
 import { quoteIdentifier } from '../src/sql.mjs';
+import { loadHostManifest } from '../src/host-manifest.mjs';
 
 // Explicit opt-in: this creates disposable schemas and makes two paid model requests.
 assert.equal(process.env.NEKI_SINGLE_SHARD, '1', 'Set NEKI_SINGLE_SHARD=1 after confirming the test database has one shard');
@@ -16,7 +17,7 @@ assert.ok(process.env.OPENCLAW_SOURCE_DIR, 'OPENCLAW_SOURCE_DIR must point to th
 assert.match(process.env.NEKI_RUNTIME_SHARD_UID || '', /^sh[a-z0-9]+$/, 'NEKI_RUNTIME_SHARD_UID must identify the approved shard');
 const source = path.resolve(process.env.OPENCLAW_SOURCE_DIR);
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
-const manifest = JSON.parse(await readFile(path.join(packageRoot, 'patches/host.json'), 'utf8'));
+const manifest = loadHostManifest(process.env.OPENCLAW_HOST_PROFILE);
 assert.equal(execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   manifest.baseCommit, 'Host checkout HEAD must match the pinned upstream commit');
 for (const file of manifest.files) {
