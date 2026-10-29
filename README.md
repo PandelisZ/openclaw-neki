@@ -41,6 +41,6 @@ This creates disposable schemas, makes paid model requests, stops the Gateway pr
 
 ## Background
 
-[Issue research](docs/issues.md) records the original snapshot, transactional DDL, and search-configuration failures. No upstream report has been posted. The host patch is an experimental proposal, not released upstream functionality.
+[Issue research](docs/issues.md) records the original snapshot, transactional DDL, and search-configuration failures. The [upstream proposal](https://github.com/openclaw/openclaw/issues/187149) is open for maintainer feedback. The host patch is an experimental proposal, not released upstream functionality.
 
 Keep private logs, database/account identifiers, configuration, and credentials out of this repository. Existing application deployments and data are outside this experiment's scope.
