@@ -62,4 +62,4 @@ Run `mise exec -- pnpm test:live` with `OPENCLAW_SOURCE_DIR`, `NEKI_DATABASE_URL
 
 ## Upstream direction
 
-The patch is a prototype of a generic pre-boot schema lifecycle capability. Further work needs upstream review of the early loading boundary, authority propagation, migration and port receipts, optional search capabilities, and backup/recovery. Do not present this package as stock-host support or publish an upstream issue/PR without the user's authorization.
+The patch is a prototype of a generic pre-boot schema lifecycle capability. Further work needs upstream review of the early loading boundary, authority propagation, migration and port receipts, optional search capabilities, and backup/recovery. The [upstream feature request](https://github.com/openclaw/openclaw/issues/187149) tracks maintainer feedback. This package still requires the experimental pinned host patch.

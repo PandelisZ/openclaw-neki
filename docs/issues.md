@@ -6,6 +6,14 @@ Searches refreshed on 2026-10-28:
 - `"pg_export_snapshot" repo:openclaw/openclaw` in issues and pull requests: no matches.
 - `"Neki" "OpenClaw"` in global issues: no matches.
 
+Publication follow-up, checked 2026-10-28:
+
+- OpenClaw core GitHub metadata reports `has_discussions=false`.
+- GitHub issue/PR searches in `openclaw/openclaw`, including comments, returned zero matches for `Neki`, `PlanetScale`, and `pg_export_snapshot`. The OpenClaw organization-wide Neki search also returned zero matches.
+- The official community forum public search API returned zero topics/posts for `neki` and `planetscale`. These searches cover publicly visible content, not private or unindexed conversations.
+- Official [support guidance](https://docs.openclaw.ai/help/support) directs support to [the community forum](https://community.openclaw.ai/) and reproducible defects to the GitHub issue chooser.
+- There is no matching public conversation to reply to in these results. The prototype repository is now public, and [OpenClaw proposal #187149](https://github.com/openclaw/openclaw/issues/187149) was opened after this search.
+
 These are bounded search results, not proof that no related report exists. OpenClaw's current main was also inspected at `386510139adaf2f7cef620de6f8ad4468fbd9294`; its database engine input still exposes only the built-in engines without a schema provider descriptor. The prototype is pinned to the original reproduced runtime, not that later commit.
 
 Related work: [Rika-Labs/akter#487](https://github.com/Rika-Labs/akter/issues/487) and [its fix, PR #553](https://github.com/Rika-Labs/akter/pull/553). The fix uses autocommit DDL with durable step receipts and a propagation barrier, but explicitly says its real Neki tests were skipped. The current test cluster returned SQLSTATE `42883` for `__neki.wait_for_ddl()`, so this extension does not assume that function exists.
@@ -19,4 +27,4 @@ A potential upstream report should include only synthetic SQL and minimized erro
 
 Single-shard direct routing allowed snapshot export in a separate probe, but schema creation and text-search configuration DDL were rejected while a direct target was set. The alpha therefore uses normal routing for bootstrap and a verified, explicit shard target after native admission for runtime data. It is limited to the approved one-shard topology. See [documented shard targeting restrictions](https://planetscale.com/docs/neki/shard-targeting-fanout).
 
-No upstream issue, comment or pull request has been posted.
+Published after the searches above: [OpenClaw feature request #187149](https://github.com/openclaw/openclaw/issues/187149). The implementation repository is public. A core OpenClaw pull request has not been opened; the proposal asks for maintainer guidance on the extension boundary.

@@ -1,6 +1,22 @@
-# Draft: pre-boot PostgreSQL schema lifecycle and capability extension
+# PlanetScale Neki native agent storage — upstream proposal
 
-Draft only. No upstream issue, comment, or pull request has been posted.
+Published as [OpenClaw feature request #187149](https://github.com/openclaw/openclaw/issues/187149) on 2026-10-28. The [implementation repository](https://github.com/PandelisZ/openclaw-neki) is public. This file retains the supporting research; the issue contains the submitted feature-request form.
+
+## Working prototype and evidence
+
+An experimental extension and version-pinned host patch are implemented in `PandelisZ/openclaw-neki`. The tested first milestone keeps shared state on SQLite and native agent data on one explicitly approved Neki shard. Stock OpenClaw requires the included patch.
+
+A real isolated Gateway completed an assistant turn on Neki, stopped, restarted in a new OS process, retrieved the exact saved assistant reply, and completed a second model turn recalling a synthetic marker from the original context. An independent PostgreSQL read also found the first assistant reply in Neki. Both processes stopped cleanly, and disposable schemas were removed with absence verified.
+
+Validation: 39 extension tests, 18 focused host tests, scoped host typecheck, touched-source lint/format, guarded patch application, and fresh independent review passed. The live test used Node.js 26.12.1 and `openai/gpt-4.1-mini`. Full upstream tests and a packaged build were not run.
+
+This is limited to fresh stores and matching sealed-store reopen. Derived full-text/vector search, migrations, database porting, topology changes, multi-shard use, and production qualification remain unsupported.
+
+Implementation and evidence:
+
+- Implementation: https://github.com/PandelisZ/openclaw-neki
+- Setup: https://github.com/PandelisZ/openclaw-neki/blob/master/docs/host-integration.md
+- Verification: https://github.com/PandelisZ/openclaw-neki/blob/master/docs/verification.md
 
 ## Problem
 
@@ -30,7 +46,7 @@ The repository's `pnpm probe --write-probes` creates and cleans up a random sche
 
 A serialized, explicitly enabled, manifest-owned schema lifecycle artifact selected before database workers start. The host should preserve responsibility for identities, generated DDL, complete catalog comparison, seed rows, schema sealing, transaction boundaries, and custody. Providers need durable effect receipts for autocommit bootstrap and explicit unavailable search capabilities. Unknown effects must stop recovery rather than authorize replay.
 
-The private prototype includes that hook, a post-admission runtime connection hook, and standalone sequence allocation for opted-in transcript writers. It rejects migrations and database porting instead of claiming a v1 hook can safely implement them. The patch is pinned and experimental; upstream review is needed before treating this as an installation API or stable contract.
+The prototype includes that hook, a post-admission runtime connection hook, and standalone sequence allocation for opted-in transcript writers. It rejects migrations and database porting instead of claiming a v1 hook can safely implement them. The patch is pinned and experimental; upstream review is needed before treating this as an installation API or stable contract.
 
 ## Questions for upstream
 
